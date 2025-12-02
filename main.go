@@ -2,39 +2,62 @@ package main
 
 import (
 	"log"
+	"net/http"
 	"os"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
-	"github.com/joho/godotenv" // Добавляем импорт
+	"github.com/joho/godotenv"
 )
 
 func main() {
-	// Загружаем переменные из .env (если файл существует)
-	if err := godotenv.Load(); err != nil {
-		log.Printf("Не удалось загрузить .env: %v (продолжаем работу)", err)
+	// ——— 1. Загружаем .env ЛОКАЛЬНО ———
+	// На Render .env нет — и не нужно. godotenv проигнорирует ошибку.
+	if os.Getenv("RENDER") == "" {
+		// Считаем, что локально — грузим .env
+		if err := godotenv.Load(); err != nil {
+			log.Printf("⚠️ .env не найден (локально) — используем окружение")
+		}
 	}
 
-	// Получаем токен из переменной окружения
+	// ——— 2. Получаем токен — из окружения (приоритет!) ———
 	token := os.Getenv("TELEGRAM_BOT_TOKEN")
 	if token == "" {
-		log.Fatal("Токен не найден! Установите переменную TELEGRAM_BOT_TOKEN в .env или окружении")
+		log.Fatal("❌ TELEGRAM_BOT_TOKEN не задан. Установите его в Render → Environment или в .env")
 	}
 
-	// Инициализация бота
+	// ——— 3. Инициализация бота ———
 	bot, err := tgbotapi.NewBotAPI(token)
 	if err != nil {
-		log.Fatal(err)
+		log.Fatal("❌ Ошибка инициализации бота:", err)
+	}
+	bot.Debug = true
+	log.Printf("✅ Авторизован как @%s", bot.Self.UserName)
+
+	// ——— 4. ОБЯЗАТЕЛЬНО: HTTP-сервер для Render ———
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080" // fallback для локального запуска
 	}
 
-	bot.Debug = true
-	log.Printf("Авторизован как %s", bot.Self.UserName)
+	// Health-check эндпоинт
+	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("✅ OK\nBot: @" + bot.Self.UserName))
+	})
 
-	// Настройка получения обновлений
+	// Запускаем HTTP в фоне — НЕ БЛОКИРУЕМ main!
+	go func() {
+		log.Printf("📡 HTTP сервер слушает :%s", port)
+		if err := http.ListenAndServe(":"+port, nil); err != nil && err != http.ErrServerClosed {
+			log.Fatal("❌ HTTP сервер упал:", err)
+		}
+	}()
+
+	// ——— 5. Long polling — как у тебя было ———
 	u := tgbotapi.NewUpdate(0)
 	u.Timeout = 60
 	updates := bot.GetUpdatesChan(u)
 
-	// Обработчик сообщений
 	for update := range updates {
 		if update.Message == nil {
 			continue
@@ -53,7 +76,7 @@ func main() {
 		}
 
 		if _, err := bot.Send(msg); err != nil {
-			log.Println(err)
+			log.Printf("⚠️ Ошибка отправки: %v", err)
 		}
 	}
 }
