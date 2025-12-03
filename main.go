@@ -75,7 +75,7 @@ func main() {
 		case update.Message.IsCommand():
 			handleCommand(update, &msg)
 		default:
-			handleTextMessage(update, &msg, bot)
+			handleTextMessage(update, &msg)
 		}
 
 		if _, err := bot.Send(msg); err != nil {
