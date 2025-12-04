@@ -21,14 +21,11 @@ type Weather struct {
 }
 
 func main() {
-	// Загружаем .env локально, если это не Render
+	// Загружаем .env только если не на Render
 	if os.Getenv("RENDER") == "" {
-		godotenv.Load()
+		_ = godotenv.Load()
 	}
 
-	// -----------------------------
-	// Telegram Bot
-	// -----------------------------
 	token := os.Getenv("TELEGRAM_BOT_TOKEN")
 	if token == "" {
 		log.Fatal("❌ TELEGRAM_BOT_TOKEN не задан")
@@ -41,45 +38,39 @@ func main() {
 	bot.Debug = true
 	log.Printf("✅ Авторизован как @%s", bot.Self.UserName)
 
-	// -----------------------------
-	// Webhook
-	// -----------------------------
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080"
+	}
+
+	// Установка Webhook
 	webhookURL := os.Getenv("WEBHOOK_URL") // Например: https://telegram-bot-kuk3.onrender.com/bot
 	if webhookURL == "" {
 		log.Fatal("❌ WEBHOOK_URL не задан")
 	}
 
-	wh, err := tgbotapi.NewWebhook(webhookURL)
+	webhookConfig, err := tgbotapi.NewWebhook(webhookURL)
 	if err != nil {
-		log.Fatal("❌ Ошибка создания webhook:", err)
+		log.Fatal("❌ Ошибка создания WebhookConfig:", err)
 	}
 
-	_, err = bot.Request(wh)
+	_, err = bot.Request(webhookConfig)
 	if err != nil {
 		log.Fatal("❌ Ошибка установки webhook:", err)
 	}
 
+	// Обработчик обновлений
 	updates := bot.ListenForWebhook("/bot")
 
-	// -----------------------------
-	// HTTP сервер для webhook
-	// -----------------------------
-	port := os.Getenv("PORT")
-	if port == "" {
-		port = "8080"
-	}
 	go func() {
 		log.Printf("📡 HTTP сервер слушает :%s", port)
 		if err := http.ListenAndServe(":"+port, nil); err != nil {
-			log.Fatal(err)
+			log.Fatal("❌ HTTP сервер упал:", err)
 		}
 	}()
 
 	log.Println("🚀 Бот запущен и ждет сообщений")
 
-	// -----------------------------
-	// Обработка обновлений
-	// -----------------------------
 	for update := range updates {
 		if update.Message == nil {
 			continue
@@ -94,11 +85,12 @@ func main() {
 		}
 
 		if _, err := bot.Send(msg); err != nil {
-			log.Printf("⚠️ Ошибка отправки сообщения: %v", err)
+			log.Printf("⚠️ Ошибка отправки: %v", err)
 		}
 	}
 }
 
+// Обработка команд
 func handleCommand(update tgbotapi.Update, msg *tgbotapi.MessageConfig) {
 	switch update.Message.Command() {
 	case "start":
@@ -108,24 +100,26 @@ func handleCommand(update tgbotapi.Update, msg *tgbotapi.MessageConfig) {
 	case "weather":
 		city := update.Message.CommandArguments()
 		if city == "" {
-			msg.Text = "Укажи город после команды /weather"
+			msg.Text = "❌ Укажи город после команды /weather"
 			return
 		}
 		fetchAndSendWeather(city, msg)
 	default:
-		msg.Text = "Неизвестная команда"
+		msg.Text = "❌ Неизвестная команда"
 	}
 }
 
+// Обработка обычного текста
 func handleTextMessage(update tgbotapi.Update, msg *tgbotapi.MessageConfig) {
 	text := strings.TrimSpace(update.Message.Text)
 	if text == "" {
-		msg.Text = "Пожалуйста, введите город"
+		msg.Text = "❌ Пожалуйста, введите город"
 		return
 	}
 	fetchAndSendWeather(text, msg)
 }
 
+// Запрос погоды и формирование ответа
 func fetchAndSendWeather(city string, msg *tgbotapi.MessageConfig) {
 	apiURL := os.Getenv("WEATHER_API_URL")
 	if apiURL == "" {
@@ -133,28 +127,26 @@ func fetchAndSendWeather(city string, msg *tgbotapi.MessageConfig) {
 		return
 	}
 
-	// Формируем URL запроса
-	url := fmt.Sprintf("%s?city=%s", apiURL, city)
-
-	resp, err := http.Get(url)
-	if err != nil || resp.StatusCode != 200 {
-		msg.Text = fmt.Sprintf("❌ Ошибка получения погоды: %v", err)
+	resp, err := http.Get(fmt.Sprintf("%s?city=%s", apiURL, city))
+	if err != nil {
+		msg.Text = fmt.Sprintf("❌ Ошибка запроса к API: %v", err)
 		return
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode != http.StatusOK {
+		msg.Text = fmt.Sprintf("❌ API вернуло ошибку: %d", resp.StatusCode)
+		return
+	}
+
 	var weather Weather
 	if err := json.NewDecoder(resp.Body).Decode(&weather); err != nil {
-		msg.Text = fmt.Sprintf("❌ Ошибка декодирования ответа: %v", err)
+		msg.Text = fmt.Sprintf("❌ Ошибка декодирования JSON: %v", err)
 		return
 	}
 
 	msg.Text = fmt.Sprintf(
 		"🌤 Погода в %s:\n• Температура: %.1f°C\n• Ощущается как: %.1f°C\n• Влажность: %d%%\n• Состояние: %s",
-		weather.City,
-		weather.Temp,
-		weather.FeelsLike,
-		weather.Humidity,
-		weather.Condition,
+		weather.City, weather.Temp, weather.FeelsLike, weather.Humidity, weather.Condition,
 	)
 }
