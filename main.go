@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 
@@ -14,22 +15,21 @@ import (
 
 type Weather struct {
 	City      string  `json:"city"`
-	Temp      float64 `json:"temp"`
+	Temp      float64 `json:"temp_celsius"`
 	FeelsLike float64 `json:"feels_like"`
 	Humidity  int     `json:"humidity"`
 	Condition string  `json:"condition"`
 }
 
 func main() {
+	// Загружаем .env локально, если нужно
 	if os.Getenv("RENDER") == "" {
-		if err := godotenv.Load(); err != nil {
-			log.Printf("⚠️ .env не найден (локально) — используем окружение")
-		}
+		_ = godotenv.Load()
 	}
 
 	token := os.Getenv("TELEGRAM_BOT_TOKEN")
 	if token == "" {
-		log.Fatal("❌ TELEGRAM_BOT_TOKEN не задан. Установите его в Render → Environment или в .env")
+		log.Fatal("❌ TELEGRAM_BOT_TOKEN не задан")
 	}
 
 	bot, err := tgbotapi.NewBotAPI(token)
@@ -45,14 +45,13 @@ func main() {
 	}
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("✅ OK\nBot: @" + bot.Self.UserName))
 	})
 
 	go func() {
 		log.Printf("📡 HTTP сервер слушает :%s", port)
-		if err := http.ListenAndServe(":"+port, nil); err != nil && err != http.ErrServerClosed {
-			log.Fatal("❌ HTTP сервер упал:", err)
+		if err := http.ListenAndServe(":"+port, nil); err != nil {
+			log.Fatal(err)
 		}
 	}()
 
@@ -71,10 +70,9 @@ func main() {
 
 		msg := tgbotapi.NewMessage(update.Message.Chat.ID, "")
 
-		switch {
-		case update.Message.IsCommand():
+		if update.Message.IsCommand() {
 			handleCommand(update, &msg)
-		default:
+		} else {
 			handleTextMessage(update, &msg)
 		}
 
@@ -86,91 +84,61 @@ func main() {
 
 func handleCommand(update tgbotapi.Update, msg *tgbotapi.MessageConfig) {
 	command := update.Message.Command()
-
 	switch command {
 	case "start":
-		msg.Text = "Привет! Я погодный бот. Доступные команды:\n" +
-			"/start — Начало\n" +
-			"/help — Справка\n" +
-			"/weather <город> — Узнать погоду (например: /погода Москва)"
-	case "help":
-		msg.Text = "Я показываю погоду по запросу.\n" +
-			"Используйте:\n" +
-			"- /погода <город> (например: /погода Санкт-Петербург)\n" +
-			"- Или просто напишите название города"
+		msg.Text = "Привет! Я погодный бот.\nИспользуй:\n/weather <город> — узнать погоду"
 	case "weather":
 		args := update.Message.CommandArguments()
 		if args == "" {
-			msg.Text = "Укажите город после команды /погода. Пример: /погода Казань"
+			msg.Text = "Укажите город после команды. Пример: /weather Москва"
 			return
 		}
 		fetchAndSendWeather(args, msg)
 	default:
-		msg.Text = "Неизвестная команда. Попробуйте /start или /help."
+		msg.Text = "Неизвестная команда. Попробуйте /start"
 	}
 }
 
 func handleTextMessage(update tgbotapi.Update, msg *tgbotapi.MessageConfig) {
 	text := strings.TrimSpace(update.Message.Text)
 	if text == "" {
-		msg.Text = "Пожалуйста, введите название города."
+		msg.Text = "Введите название города"
 		return
 	}
-
-	if strings.HasPrefix(text, "погода ") {
-		city := strings.TrimPrefix(text, "погода ")
-		fetchAndSendWeather(city, msg)
-		return
-	}
-
 	fetchAndSendWeather(text, msg)
 }
 
 func fetchAndSendWeather(city string, msg *tgbotapi.MessageConfig) {
-	weather, err := fetchWeatherFromAPI(city)
-	if err != nil {
-		msg.Text = fmt.Sprintf("Ошибка получения погоды: %v", err)
-		return
-	}
-	msg.Text = formatWeatherResponse(weather)
-}
-
-func fetchWeatherFromAPI(city string) (*Weather, error) {
 	apiURL := os.Getenv("WEATHER_API_URL")
 	if apiURL == "" {
-		return nil, fmt.Errorf("WEATHER_API_URL не задан в окружении")
+		msg.Text = "❌ WEATHER_API_URL не задан в окружении"
+		return
 	}
 
-	url := fmt.Sprintf("%s?city=%s", apiURL, city)
-	resp, err := http.Get(url)
+	// URL-энкодинг города, чтобы поддерживать русские символы
+	cityEncoded := url.QueryEscape(city)
+	fullURL := fmt.Sprintf("%s?city=%s", apiURL, cityEncoded)
+
+	resp, err := http.Get(fullURL)
 	if err != nil {
-		return nil, fmt.Errorf("ошибка запроса к API: %w", err)
+		msg.Text = fmt.Sprintf("❌ Ошибка запроса к API: %v", err)
+		return
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("API вернуло ошибку: %d", resp.StatusCode)
+		msg.Text = fmt.Sprintf("❌ API вернуло ошибку: %d", resp.StatusCode)
+		return
 	}
 
-	var weather Weather
-	if err := json.NewDecoder(resp.Body).Decode(&weather); err != nil {
-		return nil, fmt.Errorf("ошибка декодирования JSON: %w", err)
+	var w Weather
+	if err := json.NewDecoder(resp.Body).Decode(&w); err != nil {
+		msg.Text = fmt.Sprintf("❌ Ошибка декодирования JSON: %v", err)
+		return
 	}
 
-	return &weather, nil
-}
-
-func formatWeatherResponse(w *Weather) string {
-	return fmt.Sprintf(
-		"🌤 Погода в %s:\n"+
-			"• Температура: %.1f°C\n"+
-			"• Ощущается как: %.1f°C\n"+
-			"• Влажность: %d%%\n"+
-			"• Состояние: %s",
-		w.City,
-		w.Temp,
-		w.FeelsLike,
-		w.Humidity,
-		w.Condition,
+	msg.Text = fmt.Sprintf(
+		"🌤 Погода в %s:\n• Температура: %.1f°C\n• Ощущается как: %.1f°C\n• Влажность: %d%%\n• Состояние: %s",
+		w.City, w.Temp, w.FeelsLike, w.Humidity, w.Condition,
 	)
 }
