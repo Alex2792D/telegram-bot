@@ -100,9 +100,9 @@ func main() {
 func handleCommand(update tgbotapi.Update, msg *tgbotapi.MessageConfig) {
 	switch update.Message.Command() {
 	case "start":
-		msg.Text = "Привет! Я погодный бот. Используй /weather <город>"
+		msg.Text = "Привет! Я погодный бот. Используй /auth для авторизации"
 	case "auth":
-		msg.Text = "Спасибо что зарегистрировались"
+		msg.Text = "Спасибо что зарегистрировались, можешь использовать /weather <город> или /help "
 		sendUserData(update.Message.From)
 	case "help":
 		msg.Text = "Я показываю погоду. Используй /weather <город>"
