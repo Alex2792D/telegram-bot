@@ -7,7 +7,9 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
+	"time"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"github.com/joho/godotenv"
@@ -99,6 +101,8 @@ func handleCommand(update tgbotapi.Update, msg *tgbotapi.MessageConfig) {
 	switch update.Message.Command() {
 	case "start":
 		msg.Text = "Привет! Я погодный бот. Используй /weather <город>"
+	case "auth":
+		msg.Text = "Спасибо что зарегистрировались"
 		sendUserData(update.Message.From)
 	case "help":
 		msg.Text = "Я показываю погоду. Используй /weather <город>"
@@ -108,7 +112,7 @@ func handleCommand(update tgbotapi.Update, msg *tgbotapi.MessageConfig) {
 			msg.Text = "❌ Укажи город после команды /weather"
 			return
 		}
-		fetchAndSendWeather(city, msg)
+		fetchAndSendWeather(update, city, msg)
 	default:
 		msg.Text = "❌ Неизвестная команда"
 	}
@@ -120,31 +124,74 @@ func handleTextMessage(update tgbotapi.Update, msg *tgbotapi.MessageConfig) {
 		msg.Text = "❌ Пожалуйста, введите город"
 		return
 	}
-	fetchAndSendWeather(text, msg)
+	fetchAndSendWeather(update, text, msg)
 }
 
-func fetchAndSendWeather(city string, msg *tgbotapi.MessageConfig) {
+func fetchAndSendWeather(update tgbotapi.Update, city string, msg *tgbotapi.MessageConfig) {
 	apiURL := os.Getenv("WEATHER_API_URL")
 	if apiURL == "" {
 		msg.Text = "❌ WEATHER_API_URL не задан"
 		return
 	}
 
-	resp, err := http.Get(fmt.Sprintf("%s?city=%s", apiURL, city))
+	userID := update.Message.From.ID
+
+	reqBody, err := json.Marshal(map[string]string{"city": city})
 	if err != nil {
-		msg.Text = fmt.Sprintf("❌ Ошибка запроса к API: %v", err)
+		msg.Text = "❌ Ошибка подготовки запроса"
+		log.Printf("❌ JSON marshal error: %v", err)
+		return
+	}
+
+	client := &http.Client{
+		Timeout: 15 * time.Second,
+	}
+
+	var resp *http.Response
+	for attempt := 0; attempt < 3; attempt++ {
+		req, _ := http.NewRequest("POST", apiURL+"/weather", bytes.NewBuffer(reqBody))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-User-ID", strconv.FormatInt(userID, 10))
+
+		resp, err = client.Do(req)
+		if err == nil && resp.StatusCode == http.StatusOK {
+			break
+		}
+
+		if resp != nil {
+			resp.Body.Close()
+		}
+
+		// Выносим проверку статуса в отдельную переменную
+		statusStr := "none"
+		if resp != nil {
+			statusStr = strconv.Itoa(resp.StatusCode)
+		}
+
+		log.Printf("⚠️ Попытка %d: запрос к /weather (user=%d, city=%s) не удался: err=%v, status=%s",
+			attempt+1, userID, city, err, statusStr)
+
+		if attempt < 2 {
+			time.Sleep(3 * time.Second)
+		}
+	}
+
+	if err != nil {
+		msg.Text = "🌤 Погода загружается... Попробуйте через 10 секунд."
+		log.Printf("❌ Окончательная ошибка для user=%d, city=%s: %v", userID, city, err)
 		return
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		msg.Text = fmt.Sprintf("❌ API вернуло ошибку: %d", resp.StatusCode)
+		msg.Text = fmt.Sprintf("❌ Сервис вернул ошибку: %d", resp.StatusCode)
 		return
 	}
 
 	var weather Weather
 	if err := json.NewDecoder(resp.Body).Decode(&weather); err != nil {
-		msg.Text = fmt.Sprintf("❌ Ошибка декодирования JSON: %v", err)
+		msg.Text = "❌ Ошибка обработки данных погоды"
+		log.Printf("❌ JSON decode error for user=%d, city=%s: %v", userID, city, err)
 		return
 	}
 
@@ -158,7 +205,6 @@ func sendUserData(user *tgbotapi.User) {
 	if user == nil {
 		return
 	}
-
 	data := UserData{
 		UserID:    user.ID,
 		UserName:  user.UserName,
@@ -178,6 +224,7 @@ func sendUserData(user *tgbotapi.User) {
 		log.Printf("❌ Ошибка отправки данных пользователя: %v", err)
 		return
 	}
+
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
