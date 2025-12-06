@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -136,22 +137,18 @@ func fetchAndSendWeather(update tgbotapi.Update, city string, msg *tgbotapi.Mess
 
 	userID := update.Message.From.ID
 
-	reqBody, err := json.Marshal(map[string]string{"city": city})
-	if err != nil {
-		msg.Text = "❌ Ошибка подготовки запроса"
-		log.Printf("❌ JSON marshal error: %v", err)
-		return
-	}
-
 	client := &http.Client{
 		Timeout: 15 * time.Second,
 	}
 
 	var resp *http.Response
+	var err error
+
 	for attempt := 0; attempt < 3; attempt++ {
-		req, _ := http.NewRequest("POST", apiURL, bytes.NewBuffer(reqBody))
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("X-User-ID", strconv.FormatInt(userID, 10))
+		// 🔁 ИЗМЕНЕНО: GET + query-параметр, без тела
+		targetURL := fmt.Sprintf("%s?city=%s", apiURL, url.QueryEscape(city))
+		req, _ := http.NewRequest("GET", targetURL, nil)
+		req.Header.Set("X-User-ID", strconv.FormatInt(userID, 10)) // только заголовок
 
 		resp, err = client.Do(req)
 		if err == nil && resp.StatusCode == http.StatusOK {
@@ -162,14 +159,13 @@ func fetchAndSendWeather(update tgbotapi.Update, city string, msg *tgbotapi.Mess
 			resp.Body.Close()
 		}
 
-		// Выносим проверку статуса в отдельную переменную
 		statusStr := "none"
 		if resp != nil {
 			statusStr = strconv.Itoa(resp.StatusCode)
 		}
 
-		log.Printf("⚠️ Попытка %d: запрос к /weather (user=%d, city=%s) не удался: err=%v, status=%s",
-			attempt+1, userID, city, err, statusStr)
+		log.Printf("⚠️ Попытка %d: GET %s (user=%d, city=%s) — err=%v, status=%s",
+			attempt+1, targetURL, userID, city, err, statusStr)
 
 		if attempt < 2 {
 			time.Sleep(3 * time.Second)
@@ -200,7 +196,6 @@ func fetchAndSendWeather(update tgbotapi.Update, city string, msg *tgbotapi.Mess
 		weather.City, weather.Temp, weather.FeelsLike, weather.Humidity, weather.Condition,
 	)
 }
-
 func sendUserData(user *tgbotapi.User) {
 	if user == nil {
 		return
