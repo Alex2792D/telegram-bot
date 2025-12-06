@@ -149,7 +149,7 @@ func fetchAndSendWeather(update tgbotapi.Update, city string, msg *tgbotapi.Mess
 
 	var resp *http.Response
 	for attempt := 0; attempt < 3; attempt++ {
-		req, _ := http.NewRequest("POST", apiURL+"/weather", bytes.NewBuffer(reqBody))
+		req, _ := http.NewRequest("POST", apiURL, bytes.NewBuffer(reqBody))
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("X-User-ID", strconv.FormatInt(userID, 10))
 
