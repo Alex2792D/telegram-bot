@@ -114,9 +114,93 @@ func handleCommand(update tgbotapi.Update, msg *tgbotapi.MessageConfig) {
 			return
 		}
 		fetchAndSendWeather(update, city, msg)
+	case "exchange":
+		args := update.Message.CommandArguments()
+		parts := strings.Split(args, " ")
+		if len(parts) != 2 {
+			msg.Text = "❌ Формат: /exchange <база> <цель>\nПример: /exchange USD RUB"
+			return
+		}
+		base, target := parts[0], parts[1]
+		fetchAndSendExchange(update, base, target, msg)
 	default:
 		msg.Text = "❌ Неизвестная команда"
 	}
+}
+
+func fetchAndSendExchange(update tgbotapi.Update, base, target string, msg *tgbotapi.MessageConfig) {
+	apiURL := os.Getenv("EXCHANGE_API_URL")
+	if apiURL == "" {
+		msg.Text = "❌ EXCHANGE_API_URL не задан"
+		return
+	}
+
+	userID := update.Message.From.ID
+
+	client := &http.Client{
+		Timeout: 15 * time.Second,
+	}
+
+	var resp *http.Response
+	var err error
+
+	for attempt := 0; attempt < 3; attempt++ {
+		targetURL := fmt.Sprintf("%s?base=%s&to=%s", apiURL, base, target)
+		req, _ := http.NewRequest("GET", targetURL, nil)
+		req.Header.Set("X-User-ID", strconv.FormatInt(userID, 10))
+
+		resp, err = client.Do(req)
+		if err == nil && resp.StatusCode == http.StatusOK {
+			break
+		}
+
+		if resp != nil {
+			resp.Body.Close()
+		}
+
+		statusStr := "none"
+		if resp != nil {
+			statusStr = strconv.Itoa(resp.StatusCode)
+		}
+
+		log.Printf("⚠️ Попытка %d: GET %s (user=%d) — err=%v, status=%s",
+			attempt+1, targetURL, userID, err, statusStr)
+
+		if attempt < 2 {
+			time.Sleep(3 * time.Second)
+		}
+	}
+
+	if err != nil {
+		msg.Text = "💹 Курс валют временно недоступен. Попробуйте позже."
+		log.Printf("❌ Ошибка запроса курса для user=%d: %v", userID, err)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		msg.Text = fmt.Sprintf("❌ Сервис вернул ошибку: %d", resp.StatusCode)
+		return
+	}
+
+	// Структура ответа API (адаптируйте под ваш API)
+	var exchange struct {
+		Base    string  `json:"base"`
+		Target  string  `json:"target"`
+		Rate    float64 `json:"rate"`
+		Updated string  `json:"updated"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&exchange); err != nil {
+		msg.Text = "❌ Ошибка обработки данных курса"
+		log.Printf("❌ JSON decode error для user=%d: %v", userID, err)
+		return
+	}
+
+	msg.Text = fmt.Sprintf(
+		"💵 Курс валют:\n• %s → %s\n• Курс: %.4f\n• Обновлено: %s",
+		exchange.Base, exchange.Target, exchange.Rate, exchange.Updated,
+	)
 }
 
 func handleTextMessage(update tgbotapi.Update, msg *tgbotapi.MessageConfig) {
