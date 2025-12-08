@@ -30,6 +30,12 @@ type UserData struct {
 	FirstName string `json:"first_name"`
 	LastName  string `json:"last_name"`
 }
+type Exchange struct {
+	Base    string  `json:"base"`
+	Target  string  `json:"target"`
+	Rate    float64 `json:"rate"`
+	Updated string  `json:"updated"`
+}
 
 func main() {
 	if os.Getenv("RENDER") == "" {
@@ -182,13 +188,7 @@ func fetchAndSendExchange(update tgbotapi.Update, base, target string, msg *tgbo
 		return
 	}
 
-	var exchange struct {
-		Base    string  `json:"base"`
-		Target  string  `json:"target"`
-		Rate    float64 `json:"rate"`
-		Updated string  `json:"updated"`
-	}
-
+	var exchange Exchange // ← Правильно: просто объявляем переменную типа Exchange
 	if err := json.NewDecoder(resp.Body).Decode(&exchange); err != nil {
 		msg.Text = "❌ Ошибка обработки данных курса"
 		log.Printf("❌ JSON decode error для user=%d: %v", userID, err)
