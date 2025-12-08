@@ -103,10 +103,9 @@ func handleCommand(update tgbotapi.Update, msg *tgbotapi.MessageConfig) {
 	case "start":
 		msg.Text = "Привет! Я погодный бот. Используй /auth для авторизации"
 	case "auth":
-		msg.Text = "Спасибо что зарегистрировались, можешь использовать /weather <город> или /help "
-		sendUserData(update.Message.From)
+		sendUserData(update, msg)
 	case "help":
-		msg.Text = "Я показываю погоду. Используй /weather <город>"
+		msg.Text = "Я показываю погоду и курсы валют. Зарегистрируися и используй /weather <город> или /exchange USD RUB"
 	case "weather":
 		city := update.Message.CommandArguments()
 		if city == "" {
@@ -183,7 +182,6 @@ func fetchAndSendExchange(update tgbotapi.Update, base, target string, msg *tgbo
 		return
 	}
 
-	// Структура ответа API (адаптируйте под ваш API)
 	var exchange struct {
 		Base    string  `json:"base"`
 		Target  string  `json:"target"`
@@ -229,10 +227,10 @@ func fetchAndSendWeather(update tgbotapi.Update, city string, msg *tgbotapi.Mess
 	var err error
 
 	for attempt := 0; attempt < 3; attempt++ {
-		// 🔁 ИЗМЕНЕНО: GET + query-параметр, без тела
+
 		targetURL := fmt.Sprintf("%s?city=%s", apiURL, url.QueryEscape(city))
 		req, _ := http.NewRequest("GET", targetURL, nil)
-		req.Header.Set("X-User-ID", strconv.FormatInt(userID, 10)) // только заголовок
+		req.Header.Set("X-User-ID", strconv.FormatInt(userID, 10))
 
 		resp, err = client.Do(req)
 		if err == nil && resp.StatusCode == http.StatusOK {
@@ -280,10 +278,15 @@ func fetchAndSendWeather(update tgbotapi.Update, city string, msg *tgbotapi.Mess
 		weather.City, weather.Temp, weather.FeelsLike, weather.Humidity, weather.Condition,
 	)
 }
-func sendUserData(user *tgbotapi.User) {
+func sendUserData(update tgbotapi.Update, msg *tgbotapi.MessageConfig) {
+	if update.Message == nil {
+		return
+	}
+	user := update.Message.From
 	if user == nil {
 		return
 	}
+
 	data := UserData{
 		UserID:    user.ID,
 		UserName:  user.UserName,
@@ -293,20 +296,24 @@ func sendUserData(user *tgbotapi.User) {
 
 	serviceURL := os.Getenv("USER_SERVICE_URL")
 	if serviceURL == "" {
-		log.Println("❌ USER_SERVICE_URL не задан, данные пользователя не отправлены")
+		msg.Text = "❌ Ошибка: USER_SERVICE_URL не задан"
 		return
 	}
 
 	payload, _ := json.Marshal(data)
 	resp, err := http.Post(serviceURL, "application/json", bytes.NewBuffer(payload))
 	if err != nil {
-		log.Printf("❌ Ошибка отправки данных пользователя: %v", err)
+		msg.Text = "❌ Не удалось зарегистрироваться. Попробуйте позже."
+		log.Printf("❌ Ошибка отправки: %v", err)
 		return
 	}
-
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		log.Printf("❌ Сервис вернул код: %d", resp.StatusCode)
+	if resp.StatusCode == http.StatusOK {
+		msg.Text = "✅ Спасибо, что зарегистрировались!\nТеперь вы можете использовать:\n• /weather <город>\n• /exchange USD RUB\n• /help"
+		log.Printf("✅ Пользователь %d зарегистрирован", user.ID)
+	} else {
+		msg.Text = "❌ Регистрация не удалась. Повторите /auth."
+		log.Printf("❌ /user вернул %d", resp.StatusCode)
 	}
 }
